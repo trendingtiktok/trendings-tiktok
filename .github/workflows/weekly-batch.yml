@@ -20,6 +20,14 @@ jobs:
       - name: Instalar dependencias
         run: npm install
 
+      - name: Restaurar cache de uploads a Zernio
+        uses: actions/cache/restore@v4
+        with:
+          path: zernio-upload-cache.json
+          key: zernio-upload-cache-${{ github.run_id }}
+          restore-keys: |
+            zernio-upload-cache-
+
       - name: Correr weekly-batch.js
         env:
           DRIVE_API_KEY: ${{ secrets.DRIVE_API_KEY }}
@@ -27,6 +35,13 @@ jobs:
           ZERNIO_ACCOUNT_ID_A: ${{ secrets.ZERNIO_ACCOUNT_ID_A }}
           ZERNIO_ACCOUNT_ID_B: ${{ secrets.ZERNIO_ACCOUNT_ID_B }}
         run: node weekly-batch.js
+
+      - name: Guardar cache actualizado de uploads a Zernio
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: zernio-upload-cache.json
+          key: zernio-upload-cache-${{ github.run_id }}
 
       - name: Avisar éxito por Discord
         if: success()
