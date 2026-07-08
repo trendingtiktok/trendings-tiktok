@@ -1,6 +1,7 @@
 require('dotenv').config({ quiet: true });
 
 const { generateDailyPayloads, publishPost } = require('./zernio');
+const { guardarHistorialPosts, guardarSystemRun } = require('./db');
 
 const API_BASE = 'https://zernio.com/api/v1';
 const DAYS_AHEAD = 7;
@@ -69,11 +70,26 @@ async function getBatchStartDate() {
   return toArgCalendarDate(latestUtc);
 }
 
-async function publishAccountPosts(posts, accountLabel, dayLabel, results) {
+// Devuelve el historial (para Supabase) de los posts que se programaron ok en esta
+// cuenta. carousels[i] tiene los objetos { id, name, mimeType, downloadUrl } de Drive
+// para el hook/fija/ropa del post posts[i] (mismo índice que sale de generateDailyPayloads).
+async function publishAccountPosts(posts, carousels, accountLabel, dayLabel, results) {
+  const historial = [];
   for (let i = 0; i < posts.length; i++) {
     try {
       await publishPost(posts[i]);
       results.push({ day: dayLabel, account: accountLabel, index: i + 1, status: 'ok' });
+
+      const carousel = carousels[i];
+      historial.push({
+        fecha: dayLabel,
+        cuenta: accountLabel,
+        scheduledFor: posts[i].scheduledFor,
+        hookId: carousel.hook.id,
+        fijaId: carousel.fija.id,
+        ropaIds: carousel.ropa.map((photo) => photo.id),
+        caption: posts[i].tiktokSettings.description,
+      });
     } catch (err) {
       results.push({
         day: dayLabel,
@@ -86,6 +102,7 @@ async function publishAccountPosts(posts, accountLabel, dayLabel, results) {
       });
     }
   }
+  return historial;
 }
 
 function printSummary(results) {
@@ -123,40 +140,105 @@ function printSummary(results) {
   }
 }
 
+// Arma un resumen corto (para detalle_error) de los posts que fallaron, sin volcar
+// el detalle completo de cada uno (eso ya se ve en printSummary/logs de la corrida).
+function summarizeErrors(results) {
+  const failures = results.filter((r) => r.status === 'error');
+  if (failures.length === 0) return null;
+
+  const preview = failures
+    .slice(0, 5)
+    .map((f) => `${f.day} ${f.account} #${f.index}: ${f.error}`)
+    .join(' | ');
+  const rest = failures.length > 5 ? ` (+${failures.length - 5} más)` : '';
+  return `${preview}${rest}`;
+}
+
 async function main() {
+  const startTime = Date.now();
   const results = [];
+  let cacheHits = 0;
+  let cacheMisses = 0;
+  let fatalError = null;
 
-  const startDate = await getBatchStartDate();
-  console.log(`Arrancando el día después de ${formatDate(startDate)} (último post ya programado, o hoy si no había ninguno)`);
+  try {
+    const startDate = await getBatchStartDate();
+    console.log(`Arrancando el día después de ${formatDate(startDate)} (último post ya programado, o hoy si no había ninguno)`);
 
-  for (let i = 1; i <= DAYS_AHEAD; i++) {
-    const date = addDays(startDate, i);
-    const dayLabel = formatDate(date);
-    console.log(`\n=== Generando y programando ${dayLabel} ===`);
+    for (let i = 1; i <= DAYS_AHEAD; i++) {
+      const date = addDays(startDate, i);
+      const dayLabel = formatDate(date);
+      console.log(`\n=== Generando y programando ${dayLabel} ===`);
 
-    let payloads;
-    try {
-      payloads = await generateDailyPayloads(date);
-    } catch (err) {
-      console.error(`  Error generando payloads para ${dayLabel}: ${err.message}`);
-      for (const account of ['cuentaA', 'cuentaB']) {
-        for (let i2 = 1; i2 <= 10; i2++) {
-          results.push({ day: dayLabel, account, index: i2, status: 'error', error: `generación falló: ${err.message}` });
+      let payloads;
+      try {
+        payloads = await generateDailyPayloads(date);
+      } catch (err) {
+        console.error(`  Error generando payloads para ${dayLabel}: ${err.message}`);
+        for (const account of ['cuentaA', 'cuentaB']) {
+          for (let i2 = 1; i2 <= 10; i2++) {
+            results.push({ day: dayLabel, account, index: i2, status: 'error', error: `generación falló: ${err.message}` });
+          }
         }
+        continue;
       }
-      continue;
+
+      cacheHits += payloads.cacheStats.hits;
+      cacheMisses += payloads.cacheStats.misses;
+
+      const historialA = await publishAccountPosts(payloads.cuentaA, payloads.carouselsA, 'cuentaA', dayLabel, results);
+      const historialB = await publishAccountPosts(payloads.cuentaB, payloads.carouselsB, 'cuentaB', dayLabel, results);
+
+      const okCount = results.filter((r) => r.day === dayLabel && r.status === 'ok').length;
+      console.log(`  Programados OK: ${okCount}/20`);
+
+      // Guarda en Supabase solo los posts que se programaron ok. guardarHistorialPosts
+      // ya se traga sus propios errores (ver db.js); el try/catch de acá es una capa
+      // extra para que ni siquiera un fallo inesperado corte el resto del batch.
+      try {
+        await guardarHistorialPosts([...historialA, ...historialB]);
+      } catch (err) {
+        console.error(`  Error inesperado guardando historial de ${dayLabel} en Supabase (no afecta el batch): ${err.message}`);
+      }
     }
-
-    await publishAccountPosts(payloads.cuentaA, 'cuentaA', dayLabel, results);
-    await publishAccountPosts(payloads.cuentaB, 'cuentaB', dayLabel, results);
-
-    const okCount = results.filter((r) => r.day === dayLabel && r.status === 'ok').length;
-    console.log(`  Programados OK: ${okCount}/20`);
+  } catch (err) {
+    fatalError = err;
+    console.error(`Error inesperado en el batch semanal: ${err.message}`);
   }
 
   printSummary(results);
 
-  if (results.some((r) => r.status === 'error')) process.exitCode = 1;
+  const durationSeconds = Math.round((Date.now() - startTime) / 1000);
+  const postsOk = results.filter((r) => r.status === 'ok').length;
+  const postsError = results.filter((r) => r.status === 'error').length;
+
+  let status = 'success';
+  let detalleError = null;
+  if (fatalError) {
+    status = 'failure';
+    detalleError = fatalError.message;
+  } else if (postsError > 0) {
+    status = 'partial';
+    detalleError = summarizeErrors(results);
+  }
+
+  // Igual que con el historial: guardarSystemRun ya se traga sus propios errores
+  // (ver db.js), el try/catch de acá es una capa extra de seguridad.
+  try {
+    await guardarSystemRun({
+      duracionSegundos: durationSeconds,
+      postsOk,
+      postsError,
+      fotosCache: cacheHits,
+      fotosNuevas: cacheMisses,
+      status,
+      detalleError,
+    });
+  } catch (err) {
+    console.error(`Error inesperado guardando system_run en Supabase (no afecta el batch): ${err.message}`);
+  }
+
+  if (fatalError || postsError > 0) process.exitCode = 1;
 }
 
 main().catch((err) => {

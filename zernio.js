@@ -168,10 +168,15 @@ async function generateDailyPayloads(date = new Date()) {
   ]);
 
   getUploadedUrl.persist();
-  const { hits, misses } = getUploadedUrl.getStats();
-  console.log(`Fotos servidas desde cache: ${hits} | Fotos subidas nuevas: ${misses}`);
+  const cacheStats = getUploadedUrl.getStats();
+  console.log(`Fotos servidas desde cache: ${cacheStats.hits} | Fotos subidas nuevas: ${cacheStats.misses}`);
 
-  return { cuentaA, cuentaB };
+  // Se devuelven también los carruseles originales (con los IDs de Drive de cada
+  // foto) alineados por índice con cuentaA/cuentaB, para que weekly-batch.js pueda
+  // armar el historial sin tener que parsear las URLs de Zernio ya subidas, y las
+  // stats de cache del día para que weekly-batch.js las acumule en el registro de
+  // system_runs (dashboard de estado).
+  return { cuentaA, cuentaB, carouselsA, carouselsB, cacheStats };
 }
 
 async function postToZernio(payload) {
