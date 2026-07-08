@@ -3,7 +3,7 @@ name: Weekly Batch - Trendings TikTok
 on:
   schedule:
     - cron: '0 12 * * 1'  # Lunes 12:00 UTC = 9:00 Argentina
-  workflow_dispatch: {}    # permite dispararlo a mano desde GitHub también
+  workflow_dispatch: {}
 
 jobs:
   run-weekly-batch:
@@ -27,3 +27,17 @@ jobs:
           ZERNIO_ACCOUNT_ID_A: ${{ secrets.ZERNIO_ACCOUNT_ID_A }}
           ZERNIO_ACCOUNT_ID_B: ${{ secrets.ZERNIO_ACCOUNT_ID_B }}
         run: node weekly-batch.js
+
+      - name: Avisar éxito por Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node notify-discord.js success
+
+      - name: Avisar falla por Discord
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node notify-discord.js failure
