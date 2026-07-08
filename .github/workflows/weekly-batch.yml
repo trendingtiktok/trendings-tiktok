@@ -1,0 +1,29 @@
+name: Weekly Batch - Trendings TikTok
+
+on:
+  schedule:
+    - cron: '0 12 * * 1'  # Lunes 12:00 UTC = 9:00 Argentina
+  workflow_dispatch: {}    # permite dispararlo a mano desde GitHub también
+
+jobs:
+  run-weekly-batch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repo
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Correr weekly-batch.js
+        env:
+          DRIVE_API_KEY: ${{ secrets.DRIVE_API_KEY }}
+          ZERNIO_API_KEY: ${{ secrets.ZERNIO_API_KEY }}
+          ZERNIO_ACCOUNT_ID_A: ${{ secrets.ZERNIO_ACCOUNT_ID_A }}
+          ZERNIO_ACCOUNT_ID_B: ${{ secrets.ZERNIO_ACCOUNT_ID_B }}
+        run: node weekly-batch.js
