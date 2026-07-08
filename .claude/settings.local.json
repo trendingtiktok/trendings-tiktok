@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(npm *)",
+      "PowerShell(node drive.js)",
+      "PowerShell(node scheduler.js)",
+      "PowerShell(node combos.js)",
+      "PowerShell(node zernio.js)",
+      "WebSearch",
+      "WebFetch(domain:docs.zernio.com)",
+      "PowerShell(node analytics.js)",
+      "Skill(artifact-design)"
+    ]
+  }
+}
