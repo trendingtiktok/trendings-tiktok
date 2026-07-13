@@ -23,6 +23,14 @@ const CAPTION = {
     '#streetstyle #argentina #outfits #ropahombre #modaurbana',
 };
 
+// Zernio manda el segundero de espera en details.retryAfterSeconds cuando tira 429
+// (ver log real: {"error":"Rate limit exceeded...","details":{"retryAfterSeconds":3}}).
+// Esta func lo extrae de forma defensiva, sin romper si el body viene distinto.
+function extractRetryAfterSeconds(errBody) {
+  const value = errBody?.details?.retryAfterSeconds;
+  return typeof value === 'number' && value > 0 ? value : null;
+}
+
 // Zernio no siempre logra bajar las fotos de Hooks/Fija directo desde Drive (falla
 // consistentemente aunque el link sea público y funcione desde otro lado). Como
 // workaround las subimos nosotros vía su flujo de URL presignada antes de armar el
@@ -39,8 +47,9 @@ async function presignMedia(photo) {
   if (!presignRes.ok) {
     const errBody = await presignRes.json().catch(() => ({}));
     throw new ZernioApiError(
-      `Zernio presign error (${presignRes.status}): ${errBody.message || JSON.stringify(errBody)}`,
-      presignRes.status
+      `Zernio presign error (${presignRes.status}): ${errBody.message || errBody.error || JSON.stringify(errBody)}`,
+      presignRes.status,
+      extractRetryAfterSeconds(errBody)
     );
   }
   return presignRes.json();
@@ -190,7 +199,11 @@ async function postToZernio(payload) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new ZernioApiError(`Zernio API error (${res.status}): ${data.message || JSON.stringify(data)}`, res.status);
+    throw new ZernioApiError(
+      `Zernio API error (${res.status}): ${data.message || data.error || JSON.stringify(data)}`,
+      res.status,
+      extractRetryAfterSeconds(data)
+    );
   }
   return res.json();
 }

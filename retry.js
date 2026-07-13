@@ -2,10 +2,11 @@
 // fallos transitorios (red, 429, 5xx); los errores 4xx "reales" cortan al toque.
 
 class ZernioApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, retryAfterSeconds = null) {
     super(message);
     this.name = 'ZernioApiError';
     this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -25,6 +26,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Si el error trae retryAfterSeconds (Zernio lo manda en 429), ese valor manda
+// por sobre el backoff fijo -- nunca esperamos menos de lo que Zernio pide.
+function resolveDelay(err, attempt) {
+  const baseDelay = RETRY_DELAYS_MS[attempt - 1];
+  if (err instanceof ZernioApiError && err.retryAfterSeconds) {
+    const requiredMs = err.retryAfterSeconds * 1000;
+    return Math.max(baseDelay, requiredMs);
+  }
+  return baseDelay;
+}
+
 // fn: función async sin argumentos que hace la llamada real (fetch + chequeo de res.ok).
 // options.label: texto para identificar la operación en los logs de reintento.
 async function fetchWithRetry(fn, { label = 'operación' } = {}) {
@@ -35,7 +47,7 @@ async function fetchWithRetry(fn, { label = 'operación' } = {}) {
     } catch (err) {
       lastErr = err;
       if (!isRetryable(err) || attempt >= MAX_ATTEMPTS) throw err;
-      const delay = RETRY_DELAYS_MS[attempt - 1];
+      const delay = resolveDelay(err, attempt);
       console.log(`[${label}] Intento ${attempt} falló (${err.message}), reintentando en ${delay}ms...`);
       await sleep(delay);
     }

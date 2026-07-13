@@ -38,8 +38,10 @@ async function listFolderFiles(folderId) {
     pageToken = data.nextPageToken || '';
   } while (pageToken);
 
+  // Zernio solo acepta JPEG/PNG — filtra afuera HEIC/HEIF (fotos de iPhone) antes
+  // de que lleguen al presign, donde Zernio las rechaza con 400.
   return files
-    .filter((f) => f.mimeType.startsWith('image/'))
+    .filter((f) => ['image/jpeg', 'image/png'].includes(f.mimeType))
     .map((f) => ({
       id: f.id,
       name: f.name,
